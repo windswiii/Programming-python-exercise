@@ -146,10 +146,6 @@ def create_wordcloud(freqs):
     print('Cost', time.time() - start, 'seconds')
 ```
 
-生成的词云图如下：
-
-<img src="D:\HUAWEI\Documents\all_code\Python\danmuCloud.png" alt="danmuCloud" style="zoom: 20%;" />
-
 ### 创建特征集
 
 选择出现频数最高的词生成特征集。由于频数字典已排好序，直接截取前面部分的键就能得到特征集。用变量`Fss`来控制特征集的大小。
