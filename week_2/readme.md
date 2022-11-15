@@ -1,4 +1,4 @@
-# 第2周作业-20377300-薛扬帆
+# word frequency statistics
 
 完成以下数据分析任务： 
 
