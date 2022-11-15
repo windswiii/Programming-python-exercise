@@ -1,355 +1,414 @@
-# Word Frequency Statistics
-
-完成以下数据分析任务： 
-
-> 1. 使用danmuku.csv，读入文档并分词（使用jieba）。 
-> 2. 过滤停用词（使用stopwords_list.txt）并统计词频，输出特定数目的高频词和低频词进行观察。
-> 3. 根据词频进行特征词筛选，保留高频词，删除低频词，并得到特征词组成的特征集。
-> 4. 利用特征集为每一条弹幕生成向量表示，可以是0，1表示（one-hot，即该特征词在弹幕中是否出现）也可以是出现次数的表示（该特征词在弹幕中出现了多少次）。注意，可能出现一些过短的弹幕，建议直接过滤掉。 
-> 5. 利用该向量表示，随机找几条弹幕，计算不同弹幕间的语义相似度，采用欧几里得距离，并观察距离小的样本对和距离大的样本对是否在语义上确实存在明显的差别。请思考，这种方法有无可能帮助我们找到最有代表性的弹幕？
-> 6. 对高频词（如top 50之类）进行可视化呈现（WordCloud包）
+# Emotion_analyze
 
 ### 库管理
 
 ```python
-import jieba					#分词
-import csv						#读入文件
-import time						#计时
-import random					#随机抽取
-from wordcloud import WordCloud	#生成词云图
+import jieba											#分词								
+import os												#用于批量读取文件
+import re												#文本处理
+import matplotlib.pyplot as plt							#可视化
+from math import sin, asin, cos, radians, fabs, sqrt	#计算
+import numpy as np										
 ```
 
 ### 主函数
 
 ```python
 def main():
-    danmakus = in_danmaku("works\\danmuku.csv")         #读取弹幕文件
-    stopwords = in_stopword("works\\stopwords_list.txt")#读取停用词表
-    seg_list = segmentation(danmakus, stopwords)        #分词
-    freq_dict = frequency_statistics(seg_list)          #词频统计
-    create_wordcloud(freq_dict)                         #生成词云图
-    feature_set = create_feature_set(freq_dict)         #生成特征集
-    vector_set = to_vector(feature_set, seg_list)       #生成向量表示
-    test_similarity(danmakus, vector_set, 10)           #随机弹幕距离测试
-    search_nf(danmakus, vector_set, 10)                 #最近最远弹幕测试
+    weibos = wash('emotion_lexicon', 'stopwords_list.txt', 'r_weibo.txt')  
+    emo_count = count_emovector('emotion_lexicon')
+    add_emovector(weibos, emo_count)
+    temporal_pattern(weibos, 'week', 'anger', 'disgust', 'fear', 'joy', 'sadness')
+    temporal_pattern(weibos, 'day', 'anger', 'disgust', 'fear', 'joy', 'sadness')
+    spatial_pattern(weibos, 'beijing', 'anger', 'disgust', 'fear', 'joy', 'sadness')
+    return 0
 ```
 
 ## 具体函数实现
 
-### 读入文件
-
-从danmuku.csv中读取弹幕，将第一列的弹幕内容并存入`danmaku_list`列表中，返回时用`Nod`变量控制数据规模，方便进行测试。
+### 读取文件
 
 ```python
-def in_danmaku(path):
+def read_txt(path):
     '''
-    读入弹幕文件,返回弹幕内容列表
+    输入txt文件路径,返回列表
     '''
-    danmaku_file =  open(path, 'r', encoding = 'utf-8')
-    print(">正在读入弹幕文件 --- ", end = '')
-    danmaku_table = csv.reader(danmaku_file)
-    danmaku_list = [line[0] for line in danmaku_table]
-    danmaku_file.close()
-    print("完成")
-    return danmaku_list[1:Nod + 1]
+    print('Reading ' + path)
+    lst = [l.strip('\n') for l in open(path, 'r', encoding = "utf-8")]
+    return lst
 ```
 
-从stopwords_list.txt中读取停用词，整理成`stopword_list`列表
+### 数据清洗
+
+每一条微博数据包含经纬度坐标、正文内容、发布时间等信息。
+
+由于后续要进行时间模式和空间模式分析，首先要将经纬度坐标和时间提取出来。观察数据，时间信息具有统一的格式，可以直接通过字符串截取需要的时间信息。
 
 ```python
-def in_stopword(path):
-    '''
-    读入停用词表,返回停用词列表
-    '''
-    stopword_file =  open(path, 'r', encoding = 'utf-8')
-    print(">正在读入停用词表 --- ", end = '')
-    stopword_table = stopword_file.readlines()
-    stopword_list = [line.strip('\n') for line in stopword_table]
-    stopword_file.close()
-    print("完成")
-    return stopword_list
+weibo_time = (line[-30:-11]).split(' ')
 ```
 
-### 分词
+`weibo_time`是一个形如`['Fri', 'Oct', '22:19:51']`的列表。
 
-使用jieba库对每条弹幕进行分词，过滤掉停用词后，将结果存入二维列表`seg_list`中，列表中的每个元素即为对应弹幕的分词结果。
+原数据集中有一些格式错误及重复的微博，可借助时间信息的格式将其过滤掉。
 
 ```python
-def segmentation(docs, stopwords):
-    '''
-    输入文档和停用词表,进行分词
-    '''
-    seg_list = []
-    i = 1
-    start = time.time()
-    
-    print(">正在进行分词")
-    for doc in docs:
-        seg_list.append(list(word for word in jieba.lcut(doc) if word not in stopwords))
-        print('\r', i, '/', Nod, sep = '', end = ''); i += 1
-    print('\nCost', time.time() - start, 'seconds')
-    
-    return seg_list
+x = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+if weibo_time[0] not in x: continue
 ```
 
-### 词频统计
-
-利用分词结果，统计词频，得到以词：频率为键值对的字典`freq_dict`，对该字典按频率降序排序，返回排好序的频数字典`freq_rdict`，方便后续操作。
+提取空间信息时，由于经纬度坐标小数位数不一致，无法直接截取字符串，采用正则表达式匹配坐标文本。
 
 ```python
-def frequency_statistics(seg_list):
-    '''
-    统计词频,返回按频数降序排列的字典(保留前500条)
-    '''
-    freq_dict = {}
-    
-    print(">正在统计词频 ---", end = ' ')
-    for line in seg_list:
-        for word in line:
-            if word in freq_dict:
-                freq_dict[word] += 1
-            else:
-                freq_dict[word] = 1
-    print("完成")
-             
-    print(">正在对字典排序 ---", end = ' ')
-    freq_rdict = {k: v for k, v in sorted(freq_dict.items(), key = lambda item: item[1], reverse = True)}
-    print("完成")      
-    return freq_rdict
+position = re.search(r'[0-9.]+[, ]+[0-9.]+', line).group()
 ```
 
-### 绘制词云图
-
-用wordcloud库中的`.generate_from_frequencies()`方法，根据频数字典的数据生成词云图。
+最后处理正文，用正则表达式删去网址、数字、特殊符号等无意义的文本。
 
 ```python
-def create_wordcloud(freqs):
-    '''
-    输入频数字典,生成词云图
-    '''
-    start = time.time()
-    print(">正在生成词云图 --- ", end = '')
-    cloud0 = WordCloud(
-        background_color = 'rgba(245,213,254,0)',
-        mode = 'RGBA',
-        colormap = 'Set2',
-        font_path = 'C:/Windows/Font/simhei.ttf',
-        max_words = 300,
-        max_font_size = 400,
-        min_font_size = 2,
-        width = 1500,
-        height = 1500,
-    )
-    cloud = cloud0.generate_from_frequencies(freqs)
-    cloud.to_file('danmuCloud_1.png')
-    print("完成")
-    print('Cost', time.time() - start, 'seconds')
+URL_REGEX = re.compile(
+    		'(http|ftp|https):\/\/[\w\-_]+(\.[\w\-_]+)+([\w\-\.,@?^=%&:/~\+#]*[\w\-\@?^=%&/~\+#])?',
+            re.IGNORECASE)
+    text = re.sub(URL_REGEX, "", line[:-30])      #去除网址
+    text = re.sub(r'[0-9.?,@\t]+', '', text)   #去除数字及部分符号
 ```
 
-### 创建特征集
-
-选择出现频数最高的词生成特征集。由于频数字典已排好序，直接截取前面部分的键就能得到特征集。用变量`Fss`来控制特征集的大小。
+将情绪词典加入jieba库的自定义词典中，再导入停用词表，对正文进行分词。
 
 ```python
-def create_feature_set(dic):
+emofiles = os.listdir(emo_path)
+for file in emofiles: 
+    jieba.load_userdict(emo_path + '/' + file)
+stopwords = read_txt(stop_path)
+```
+
+最后，将每条微博的上述信息（时间、空间、正文分词结果）整合为列表，最终函数如下：
+
+```python
+def wash(emo_path, stop_path, weibo_path):
     '''
-    输入频数字典,返回一个由频数最高的词组成的特征集
+    输入对应路径,以多维列表形式返回整理好的数据
     '''
     
-    feature_set = []
-    i = 0
-    for key in dic.keys():
-        feature_set.append(key)
-        i += 1
-        if i > Fss : break
-    feature_set = tuple(feature_set)
-    f = open('Result_1.txt', 'w')
-    print("提取到的特征集为:\n", feature_set, file = f)
-    f.close()
-    return feature_set
-```
-
-生成的特征集与词云图一致：
-
-```python
- ('哈哈哈哈', '武汉', '吃', '加油', '藕', '蒜', '好吃', '真的', '萝卜', '热情', '想', '粉', '大哥', '啊啊啊', '独头', '喜欢', '牛杂', '考古', '真', '笑', '死', '户部', '爱', '感觉', '买', '街', '巷', '树梢', '大蒜', '可爱', '饿', '洛阳', '湖北', '猝不及防', '疫情', '大佬', '恰饭', '好好', '卤', '沐', '地方', '丑', '恰', '氛围', '米粉', '便宜', '辣', '希望', '长子', '四川', '牛肉', '广告', '走', '2020', '闻见', '哭', '视频', '痔疮', '江西', '邵阳', '好像', '嗦', '里', '这是', '岁', '味道', '馋', '牙膏', '超', '闻到', '恍恍惚惚', '老乡', '旁边', '弹幕', '棒', '常德', '吼吼', '闻', '香', '中国', 'h', '母上', '泪目', '气', '云南白药', '广西', '热', '2021', '跑', '去过', '红红火火')
-```
-
-### 生成向量表示
-
-采用one-hot方法会遗漏部分信息，而根据特征词出现次数生成向量又会导致重复信息权重过高。
-
-例如在后续的距离计算中，在“蒜蒜蒜蒜蒜蒜蒜蒜蒜蒜”这条弹幕中，特征词“蒜”出现了10次，导致其与正常弹幕的距离非常远。
-
-```python
-Test1
-武汉藕霸
-最近的弹幕为:武汉的藕好吃呀！
-距离: 1.0
-最远的弹幕为:蒜蒜蒜蒜蒜蒜蒜蒜蒜蒜
-距离: 10.099504938362077
-
-Test2
-卤味真的超好吃
-最近的弹幕为:藕真的超好吃
-距离: 1.0
-最远的弹幕为:蒜蒜蒜蒜蒜蒜蒜蒜蒜蒜
-距离: 10.099504938362077
-```
-
-因此有必要对重复的特征词进行一定限制，多次测试后，发现将单个分量的值限制为0,1,2得到的效果最佳。当某一特征值在一个弹幕中出现的次数超过2时，将其设为2。
-
-```
-val = min(2, docs[i].count(feature_set[j]))
-```
-
-另外，一些过短的或者基本不包含特征词的弹幕对于后续的分析几乎无意义，因此将它们过滤掉。用`Filt`变量来控制筛选强度。`Filt = 1`即表示只保留包含2个以上特征词的弹幕。
-
-最后，将每个向量列表存入二维列表`vector_set`中，由于过程中筛选掉了一部分数据，每个向量和弹幕文档不再一一对应，所以在每个向量的末尾加上其对应弹幕在弹幕列表`danmakus`中的索引值。
-
-```python
-def to_vector(feature_set, docs):
-    '''
-    生成弹幕的向量表示
-    '''
-    vector_set = []  
-    print(">正在生成向量表示 --- ", end = '')
-    for i in range(len(docs)):
-        vector_doc = [0] * (Fss + 1)
-        vector_doc[-1] = i                              #记录弹幕序号
-        flag = 0
-        #print('\r', i, '/', Nod, sep = '', end = '')
-        for j in range(Fss):
-            val = min(2, docs[i].count(feature_set[j]))
-            vector_doc[j] = val
-            flag += val 
-        if flag > Filt:                                       #过滤掉无意义的向量
-            vector_set.append(vector_doc)
-    print("完成", end = '')
+    emofiles = os.listdir(emo_path)
+    for file in emofiles: 
+        jieba.load_userdict(emo_path + '/' + file)
+    stopwords = read_txt(stop_path)
     
-    return vector_set
+    weibo_l = []
+    c = 1
+    x = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    
+    for line in read_txt(weibo_path)[1:NOD + 1]:
+        
+        if c % 1000 == 0: 
+            print('\rWashing the Weibo data:%4.2f' % float(100 * c / NOD), '%', sep = '', end = '')
+        c += 1
+        weibo = []
+        
+        #读取时间
+        weibo.append((line[-30:-11]).split(' '))
+        if weibo[0][0] not in x: continue       #过滤掉格式出错的文本
+                
+        #读取正文内容
+        URL_REGEX = re.compile(
+            '(http|ftp|https):\/\/[\w\-_]+(\.[\w\-_]+)+([\w\-\.,@?^=%&:/~\+#]*[\w\-\@?^=%&/~\+#])?',
+            re.IGNORECASE)
+        text = re.sub(URL_REGEX, "", line[:-30])      #去除网址
+        text = re.sub(r'[0-9.?,@\t]+', '', text)   #去除数字及部分符号
+        weibo.insert(0, [word for word in jieba.lcut(text) if word not in stopwords])
+        
+        #读取位置
+        position = re.search(r'[0-9.]+[, ]+[0-9.]+', line).group()
+        weibo.insert(1, [float(i) for i in position.split(', ')])
+
+        weibo_l.append(weibo)
+    
+    print('\rWashing the Weibo data:100.00%')
+    return weibo_l
 ```
 
-### 语义相似度分析
+### 情绪分析
 
-计算欧几里得距离，比较弹幕之间的语义相似程度。
+采用向量法分析情绪，即统计每种情绪词在文本中的出现次数，再计算各情绪所占比例。
 
 ```python
-def dist_calcuate(a, b):
+def count_emovector(emo_path):
     '''
-    计算两条弹幕之间的相似度（欧几里得距离）
+    输入情绪字典文件路径,计算情绪向量
     '''
-    distance = 0
-    for i in range(Fss):
-        distance += (a[i] - b[i]) ** 2
-    return distance ** 0.5
+    
+    #读入字典
+    files= os.listdir(emo_path)
+    elist = []
+    for file in files: 
+        elist.append(read_txt(emo_path + '/' + file))
+        
+    #情绪分析
+    def e_count(text):
+        emo_vector = [0, 0, 0, 0, 0]    #[anger, disgust, fear, joy, sadness]
+        for word in text:
+            for i in range(5):
+                if word in elist[i]:
+                    emo_vector[i] += 1
+                    break
+        
+        if emo_vector.count(emo_vector[0]) == 5: 
+            return [0] * 5
+        #向量标准化处理
+        length = sum(emo_vector)
+        for i in range(5):
+            emo_vector[i] /= length
+        
+        return emo_vector
+    
+    return e_count
 ```
 
-随机选择n对弹幕，计算每一对之间的距离，并分析二者的语义相似程度。
+对每条微博数据，计算并记录其情绪向量。
 
 ```python
-def test_similarity(docs, vectors, n):
+def add_emovector(weibos, e_count):
     '''
-    随机选择n对弹幕,计算其相似度
-    '''  
-    f = open('Result_1.txt', 'a')
-    print("\n--随机选择n对弹幕,计算其相似度--", file = f)
-    for i in range(n):
-        print("\nTest", i + 1, sep = '', file = f)
-        a = random.choice(vectors)
-        b = random.choice(vectors)
-        print(docs[a[Fss]], '\n', docs[b[Fss]], file = f)
-        print("距离为:", dist_calcuate(a, b), file = f)
-    f.close()
+    输入微博数据集及情绪计算方法,为其添加情绪向量
+    '''
+    c = 0
+    for weibo in weibos: 
+        if c % 1000 == 0: 
+            print('\rGenetating emotion vectors:%4.2f' % float(100 * c / len(weibos)), '%', sep = '', end = '')
+        c += 1
+        weibo.append(e_count(weibo[0]))
+        
+    print('\rGenetating emotion vectors:100.00%')
 ```
 
-观察下列部分计算结果，可以发现距离与语义相似度之间存在一定关系。距离较小的一对弹幕更可能包含相同的特征词，而距离较远的弹幕几乎毫无联系。
+### 时间模式分析
 
-```
-Test1
-这里旁边有家灌汤包，特别好吃 
- 锅贴诶  我最喜欢吃的
-距离为: 2.0
+主要实现了两种时间模式分析，即周模式和日模式。
 
-Test2
-我买，我买，还不行吗 
- 吃蛋糕都就蒜~
-距离为: 2.449489742783178
+情绪参数通过元组形式输入，可以一次性生成输入的所有情绪的图像。
 
-Test3
-户部巷别去啊啊啊  粮道街粮道街 
- 哈哈哈哈哈哈哈哈
-距离为: 3.1622776601683795
-
-Test4
-吉庆街没人吃的 
- 今天还吃了藕夹
-距离为: 1.4142135623730951
-```
-
-对于给定的一条弹幕，从所有弹幕中检索距其最近的和最远的弹幕，并分析这些弹幕之间的语义相似程度。
+首先建立情绪-索引值、情绪-颜色的字典，方便对输入的情绪参数进行处理。
 
 ```python
-def search_nf(docs, vectors, n):
+emo_index = {'anger': 0,'disgust': 1,'fear': 2,'joy': 3,'sadness': 4}
+emo_color = {'anger': 'r','disgust': 'm','fear': 'k','joy': 'y','sadness': 'b'}
+```
+
+对于日模式，建立长度为24的列表`y`，记录每小时该情绪出现的次数，同时用一个列表`y_total`记录对应时段内参与计算的微博数据总数，以计算情绪比例。周模式同理。
+
+```python
+def temporal_pattern(weibos, mode, *emos):
     '''
-    随机选择n条弹幕,并匹配距其最近的和最远的弹幕
+    输入情绪类型和模式,绘制情绪强度-时间折线图
     '''
-    f = open('Result_1.txt', 'a')
-    print("\n--随机选择n条弹幕,并匹配距其最近的和最远的弹幕--", file = f)
-    for i in range(n):
-        near = [0, float('inf')]
-        far = [0, 0]
-        print("\nTest", i + 1, sep = '', file = f)
-        vec_a = random.choice(vectors)
-        for vec_b in vectors:
-            if vec_b[:-1] == vec_a[:-1]: continue
-            dist = dist_calcuate(vec_a, vec_b)
-            if dist > far[1]:
-                far[1] = dist
-                far[0] = vec_b[-1]
-            if dist < near[1]:
-                near[1] = dist
-                near[0] = vec_b[-1]
-        print(docs[vec_a[-1]], file = f)
-        print("最近的弹幕为:", docs[near[0]], '\n', "距离: ", near[1], sep = '', file = f)
-        print("最远的弹幕为:", docs[far[0]], '\n', "距离: ", far[1], sep = '', file = f)
-    f.close()
+    if mode == 'week':
+        x = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        
+        for emo in emos:
+            y = [0] * 7
+            y_total = [1] * 7
+            c = 0
+            
+            for weibo in weibos:
+                
+                if c % 1000 == 0 : 
+                    print('\rCounting ', emo, ':%4.2f' % float(100 * c / len(weibos)), '%', sep = '', end = '')
+                c += 1
+                
+                i = x.index(weibo[2][0])
+                y[i] += weibo[3][emo_index[emo]]
+                y_total[i] += 1
+            print('\rCounting ', emo, ':100.00%', sep = '')
+            
+            for i in range(7):
+                y[i] /= y_total[i]
+                
+            plt.plot(x, y, emo_color[emo])
+            
+        plt.xticks(x)
+        plt.xlabel('Day')
+        
+    if mode == 'day':
+        x = list(range(24))
+        for emo in emos:
+            c = 0
+            y = [0] * 24
+            y_total = [1] * 24
+            
+            for weibo in weibos:
+                
+                if c % 1000 == 0 : 
+                    print('\rCounting ', emo, ':%4.2f' % float(100 * c / len(weibos)), '%', sep = '', end = '')
+                c += 1
+                
+                i = int(weibo[2][3][0:2])
+                y[i] += weibo[3][emo_index[emo]]
+                y_total[i] += 1
+            print('\rCounting ', emo, ':100.00%', sep = '')
+            
+            for i in range(24):
+                y[i] /= y_total[i]
+                
+            plt.plot(x, y, emo_color[emo])
+            
+        xtick = [str(i).zfill(2) + ':30' for i in x]      
+        plt.xticks(x, xtick, rotation = 60)   
+        plt.xlabel('Hour')
+        
+    plt.legend(emos)
+    plt.ylabel('Percentage')
+    name = ''
+    for emo in emos:
+        name = name + '_' + emo
+    plt.savefig('result/' + mode + name + '.png')
+    plt.show()
 ```
 
-观察下列部分计算结果，距离最近的弹幕有较多相似的特征词，语义都是相近的；而最远的弹幕几乎和该弹幕完全没有语义关联。
+### 空间模式
 
-```
-Test5
-我们湖北的藕是真的好吃
-最近的弹幕为:藕真的好吃
-距离: 1.0
-最远的弹幕为:一想到现在的疫情就想哭    明明是这么热情可爱的武汉人   一定要加油啊  武汉加油  中国加油！   
-距离: 4.242640687119285
+该数据集的微博数据大致来源于四个城市：北京、上海、广州、成都，查询其经纬度分别为：
 
-Test6
-2020年9月盗月社再次光顾长堤街后，前来考古，武汉加油
-最近的弹幕为:2020  1.27武汉加油！
-距离: 1.0
-最远的弹幕为:萝卜牛杂的妙处就是萝卜啊，牛杂固然好吃，但牛杂本来就好吃，萝卜换了其他做法可远出不来那个味
-距离: 4.0
-
-Test7
-为邵阳米粉打call啊啊啊啊
-最近的弹幕为:啊啊啊邵阳米粉超好吃的
-距离: 1.4142135623730951
-最远的弹幕为:武汉的卤藕超好吃，而且到了武汉才知道藕也可以卤
-距离: 4.123105625617661
-
-Test8
-她真的好喜欢吃蒜OMG
-最近的弹幕为:重庆也有这个  我不喜欢吃蒜
-距离: 1.0
-最远的弹幕为:武汉的卤藕超好吃，而且到了武汉才知道藕也可以卤
-距离: 4.242640687119285
+```python
+city_coord = {
+    'beijing'  : [39.92, 116.46],
+    'shanghai' : [31.22, 121.48],
+    'guangzhou': [23.16, 113.23],
+    'chengdu'  : [30.67, 104.06]
+}
 ```
 
-结合上面两个测试可以看出，弹幕向量之间的欧几里得距离和语义相似度存在明显相关性。
+以此为城市中心坐标。
 
-然而，这种方法只能用于判断两句话是否说的是同一个话题，而不能区分具体观点的差别。例如Test8中，“喜欢”“吃蒜”两个特征词就足以让两者距离非常相近，而考虑特征词之外的部分，这两条弹幕的表意完全不同。
+通过经纬度获取空间距离，可通过Haversine公式进行计算，其中 ：
+$$
+haversin(\theta) = sin^2(\theta/2) = (1-cos(\theta))/2
+$$
 
-更进一步的分析还应该考虑否定词、词的排列顺序等情况。
+$$
+hav(\theta) = hav(\varphi_2-\varphi_1)+cos(\varphi_1)cos(\varphi_2)hav(\lambda_2-\lambda_1)
+$$
+
+其中θ为d/R，R为地球半径，d为两地间距离。
+
+```python
+def get_distance(coord1, coord2):
+    '''
+    输入两点经纬坐标,用haversine公式计算球面两点间的距离
+    '''
+    def hav(theta):
+        s = sin(theta / 2)
+        return s * s
+
+    lat1 = radians(coord1[0])
+    lng1 = radians(coord1[1])
+    lat2 = radians(coord2[0])
+    lng2 = radians(coord2[1])
+    dlng = fabs(lng1 - lng2)
+    dlat = fabs(lat1 - lat2)
+    h = hav(dlat) + cos(lat1) * cos(lat2) * hav(dlng)
+    distance = 2 * EARTH_RADIUS * asin(sqrt(h))
+    return distance
+```
+
+对每一条微博，首先过滤掉经纬度差超过1（离城市中心过远）的，再生成一个包含距城市中心距离及各情绪值的列表，并根据距离进行排序。
+
+```python
+    for weibo in weibos:
+        
+        if (abs(weibo[1][0] - center[0]) < 1) and (abs(weibo[1][1] - center[1]) < 1):
+            dist_emos = [get_distance(center, weibo[1]),]
+            for emo in emos:
+                dist_emos.append(weibo[3][emo_index[emo]])
+            dist_emo_list.append(dist_emos)
+
+    dist_emo_list = sorted(dist_emo_list, key = (lambda x:x[0]))
+```
+
+对排好序的列表进行遍历，将各情绪值累加起来，同时记录总的情绪向量数以计算比例。创建一个均匀分布的距离序列`x`，分别记录一定距离下的情绪比例，以生成距离-情绪关系。
+
+```python
+	count = 1
+	length = len(dist_emo_list)
+	emo = [0,] * len(emos)
+    x = list(np.arange(0, 30, 0.2))
+    ys = []
+    
+    for i in x:
+        while dist_emo_list[count][0] < i:
+            
+            for j in range(len(emos)):
+                emo[j] += dist_emo_list[count][j + 1]
+            count += 1
+            if count >= length: break
+            
+        ys.append([e / count for e in emo])
+```
+
+最终函数如下：
+
+```python
+def spatial_pattern(weibos, city, *emos):
+    '''
+    输入情绪类型及城市,绘制对应城市的情绪强度-距离折线图
+    '''    
+    center = city_coord[city]
+    dist_emo_list = []
+    c = 0
+    
+    for weibo in weibos:
+        
+        if c % 1000 == 0 : 
+            print('\rCalculating the distance:%4.2f' % float(100 * c / len(weibos)), '%', sep = '', end = '')
+        c += 1
+        
+        if (abs(weibo[1][0] - center[0]) < 1) and (abs(weibo[1][1] - center[1]) < 1):
+            dist_emos = [get_distance(center, weibo[1]),]
+            for emo in emos:
+                dist_emos.append(weibo[3][emo_index[emo]])
+            dist_emo_list.append(dist_emos)
+            
+    print('\rCalculating the distance:100.00%')
+    dist_emo_list = sorted(dist_emo_list, key = (lambda x:x[0]))    # 按与中心的距离排序
+    
+    count = 1
+    length = len(dist_emo_list)
+    emo = [0,] * len(emos)
+    x = list(np.arange(0, 30, 0.2))
+    ys = []
+    
+    c = 0
+    for i in x:
+        while dist_emo_list[count][0] < i:
+            
+            if c % 1000 == 0 : 
+                print('\rCounting emotions:%4.2f' % float(100 * c / length), '%', sep = '', end = '')
+            c += 1
+            
+            for j in range(len(emos)):
+                emo[j] += dist_emo_list[count][j + 1]
+            count += 1
+            if count >= length: break
+            
+        ys.append([e / count for e in emo])
+    print('\rCounting emotions:100.00%')
+        
+    for i in range(len(emos)):
+        y = [x[i] for x in ys]
+        plt.plot(x, y, emo_color[emos[i]])
+    
+    plt.xlabel('Distance from the city center (KM)')
+    plt.ylabel('Percentage')
+    plt.legend(emos)
+    name = ''
+    for emo in emos:
+        name = name + '_' + emo
+    plt.savefig('result/' + city + name + '.png')
+    plt.show()
+```
+
+## 思考
+
+- 采用字典方法进行情绪理解，思路简单易于实现，但是需要极大的样本量以生成情绪字典并提高准确性，另外，字词与情绪并不一定是一一对应的关系，精确判别情绪更需要对句子整体的语义判别。可以基于已有的情绪字典，从分好类的情绪文本中提取特征词，进一步扩充情绪词典。
+- 情绪与消费欲望、工作积极性都有一定相关性。借助情绪的时空模式，管理者可以更好地安排员工的工作强度，或在适当时间予以激励；情绪不同时，消费者对于不同商品的需求也有所不同，商家可以据此在适当的时间推送广告等，刺激消费者的购买欲望。
+
