@@ -1,4 +1,4 @@
-# word frequency statistics
+# Word Frequency Statistics
 
 完成以下数据分析任务： 
 
